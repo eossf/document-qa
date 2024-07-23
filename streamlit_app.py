@@ -1,5 +1,6 @@
 import streamlit as st
-from openai import OpenAI
+import backoff  # for exponential backoff
+from openai import OpenAI, RateLimitError
 
 # Show title and description.
 st.title("📄 Document question answering")
@@ -11,9 +12,10 @@ st.write(
 # Ask user for their OpenAI API key via `st.text_input`.
 # Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
 # via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 if not openai_api_key:
     st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+    openai_api_key = st.text_input("OpenAI API Key", type="password")
 else:
 
     # Create an OpenAI client.
@@ -35,7 +37,7 @@ else:
 
         # Process the uploaded file and question.
         document = uploaded_file.read().decode()
-        messages = [
+        message_in = [
             {
                 "role": "user",
                 "content": f"Here's a document: {document} \n\n---\n\n {question}",
@@ -43,11 +45,17 @@ else:
         ]
 
         # Generate an answer using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            stream=True,
-        )
+        # stream = client.chat.completions.create(
+        #     model="gpt-3.5-turbo",
+        #     messages=message_in,
+        #     stream=True,
+        # )
+
+        @backoff.on_exception(backoff.expo, RateLimitError)
+        def completions_with_backoff(**kwargs):
+            return client.chat.completions.create(**kwargs)
+        
+        stream = completions_with_backoff(model="gpt-3.5-turbo", messages=message_in)
 
         # Stream the response to the app using `st.write_stream`.
         st.write_stream(stream)
